@@ -1,23 +1,28 @@
-# Sound Captain AI Server
+# Sound Captain Gemini AI Server
 
-Backend URL for app:
+Render settings:
 
+Build Command:
+```bash
+npm install
+```
+
+Start Command:
+```bash
+npm start
+```
+
+Environment variable:
+```text
+GEMINI_API_KEY = your Gemini key
+```
+
+App backend URL:
 ```text
 https://YOUR-RENDER-URL.onrender.com/api/chat
 ```
 
-Render settings:
-
-```text
-Build Command: npm install
-Start Command: npm start
-Environment Variable: OPENAI_API_KEY = your key
-```
-
-Test in browser:
-
+Test:
 ```text
 https://YOUR-RENDER-URL.onrender.com/health
 ```
-
-Important: API key app मध्ये टाकू नका. ती Render Environment मध्येच ठेवा.

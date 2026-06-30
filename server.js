@@ -1,96 +1,90 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-
 app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
-const hasKey = Boolean(process.env.OPENAI_API_KEY);
-const openai = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const PORT = process.env.PORT || 3000;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-const SYSTEM_PROMPT = `
-You are Sound Captain AI, a professional PA tuning assistant for live sound engineers.
-Reply mainly in Marathi/Hinglish when the user asks in Marathi/Hinglish.
-Give practical, safe, step-by-step guidance for:
-- DBX260 / PA2 / DSP setup
-- limiter, crossover slope, HPF/LPF
-- bass weak diagnosis
-- delay alignment, polarity, phase
-- RTA, frequency chart, reports
-Do not give fake certainty. Ask for needed values like amp watts, ohms, speaker RMS, crossover point when required.
-Keep answers clear and field-ready.
-`;
+function pickUserText(body = {}) {
+  if (typeof body === "string") return body;
+  return (
+    body.message ||
+    body.question ||
+    body.prompt ||
+    body.text ||
+    body.query ||
+    body.input ||
+    body.userMessage ||
+    ""
+  ).toString();
+}
 
-function offlineAnswer(message = "") {
-  const m = String(message).toLowerCase();
-  if (m.includes("bass") || m.includes("base") || m.includes("weak")) {
-    return "Bass weak असल्यास आधी polarity +/- तपासा, crossover 80Hz LR24 ठेवा, bass HPF 35Hz BW24/LR24 ठेवा, tops मध्ये 80Hz खाली cut करा, आणि bass-top delay alignment करा. 2 bass 2 top मध्ये bass मागे जास्त आणि पुढे कमी येत असेल तर placement/cardioid cancellation किंवा polarity issue असू शकतो.";
+function localFallback(text) {
+  const q = text.toLowerCase();
+  if (q.includes("bass") || q.includes("base")) {
+    return "Bass weak असेल तर polarity +/− तपासा, crossover 80Hz LR24 ठेवा, bass delay 0–3ms मध्ये test करा, limiter जास्त tight नसेल याची खात्री करा, आणि bass/top crossover point वर RTA मध्ये cancellation आहे का पाहा.";
   }
-  if (m.includes("xover") || m.includes("crossover") || m.includes("slope")) {
-    return "Safe starting point: Bass LPF 80Hz LR24, Top/Low-mid HPF 80Hz LR24. HF साठी driver नुसार HPF ठेवा. Phase match साठी crossover point वर polarity आणि delay तपासा.";
+  if (q.includes("dbx") || q.includes("limiter")) {
+    return "DBX260 limiter साठी amp power, speaker RMS, ohm आणि amp gain/sensitivity नुसार threshold set करा. OverEasy OFF ठेवा, bass attack थोडा slow आणि HF attack fast ठेवा.";
   }
-  if (m.includes("limiter") || m.includes("dbx")) {
-    return "DBX260 limiter सेट करताना speaker RMS, ohm, amp power आणि amp sensitivity लागते. साधारण OverEasy OFF, PeakStop+ ON, bass attack थोडा slow आणि HF attack fast ठेवा. चुकीचा limiter driver खराब करू शकतो.";
+  if (q.includes("xover") || q.includes("crossover") || q.includes("slope")) {
+    return "PA tuning साठी safe crossover slope LR24 वापरा. Bass LPF आणि Top/Low-mid HPF same frequency ठेवा. HF साठी LR48 जास्त safe असू शकतो.";
   }
-  return "Sound Captain local guide: तुमचा प्रश्न PA tuning बद्दल आहे. Accurate उत्तरासाठी speaker RMS, ohm, amp watt, crossover frequency, DSP model आणि system layout सांगा.";
+  return "मी Sound Captain AI आहे. PA tuning, DBX260 limiter, crossover, alignment, RTA आणि bass weak problem साठी प्रश्न विचारा.";
 }
 
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    name: "Sound Captain AI Server",
-    status: "running",
-    endpoint: "/api/chat",
-    openai_key_loaded: hasKey
-  });
+  res.json({ ok: true, name: "Sound Captain Gemini AI Server", endpoint: "/api/chat" });
 });
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, status: "healthy", openai_key_loaded: hasKey });
+  res.json({ ok: true, provider: "gemini", hasKey: Boolean(GEMINI_API_KEY) });
 });
 
 app.post("/api/chat", async (req, res) => {
   try {
-    const body = req.body || {};
-    const userMessage = body.message || body.question || body.prompt || body.text || "";
-
-    if (!userMessage || String(userMessage).trim().length === 0) {
-      return res.status(400).json({
-        ok: false,
-        error: "Message is required",
-        answer: "कृपया AI ला प्रश्न लिहा."
+    const userText = pickUserText(req.body);
+    if (!userText.trim()) {
+      return res.json({
+        answer: "कृपया प्रश्न लिहा.",
+        reply: "कृपया प्रश्न लिहा.",
+        text: "कृपया प्रश्न लिहा.",
+        message: "कृपया प्रश्न लिहा."
       });
     }
 
-    if (!hasKey) {
-      const ans = offlineAnswer(userMessage);
-      return res.json({ ok: true, mode: "local_fallback", answer: ans, reply: ans, text: ans });
+    if (!GEMINI_API_KEY) {
+      const fb = localFallback(userText);
+      return res.json({ answer: fb, reply: fb, text: fb, message: fb, offline: true });
     }
 
-    const completion = await openai.chat.completions.create({
-      model: MODEL,
-      temperature: 0.35,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: String(userMessage) }
-      ]
-    });
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const ans = completion.choices?.[0]?.message?.content || "AI कडून उत्तर मिळाले नाही.";
-    res.json({ ok: true, mode: "online", answer: ans, reply: ans, text: ans });
-  } catch (error) {
-    const ans = "AI server error आला. Render Environment मध्ये OPENAI_API_KEY नीट आहे का तपासा.";
-    res.status(500).json({ ok: false, error: error.message, answer: ans, reply: ans, text: ans });
+    const prompt = `You are Sound Captain AI, a practical PA system tuning expert for Indian live sound engineers. Answer mainly in simple Marathi mixed with Hindi/English sound terms. Give clear field steps. Topics: DBX260, PA2, limiter, crossover, LR24/LR48, delay alignment, polarity, RTA, bass weak, 4 bass 8 top, amps, DSP.\n\nUser question: ${userText}`;
+
+    const result = await model.generateContent(prompt);
+    const output = result.response.text() || localFallback(userText);
+
+    res.json({
+      answer: output,
+      reply: output,
+      text: output,
+      message: output,
+      success: true
+    });
+  } catch (err) {
+    console.error(err);
+    const fb = localFallback(pickUserText(req.body));
+    res.status(200).json({ answer: fb, reply: fb, text: fb, message: fb, fallback: true, error: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Sound Captain AI Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Sound Captain Gemini AI Server running on port ${PORT}`));
